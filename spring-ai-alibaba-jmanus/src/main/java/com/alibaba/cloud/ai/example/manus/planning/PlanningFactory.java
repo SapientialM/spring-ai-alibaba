@@ -91,6 +91,7 @@ import com.alibaba.cloud.ai.example.manus.tool.pptGenerator.PptGeneratorOperator
 import com.alibaba.cloud.ai.example.manus.tool.jsxGenerator.JsxGeneratorOperator;
 import com.alibaba.cloud.ai.example.manus.tool.excelProcessor.ExcelProcessorTool;
 import com.alibaba.cloud.ai.example.manus.tool.excelProcessor.IExcelProcessingService;
+import com.alibaba.cloud.ai.example.manus.tool.dataProcessor.DataProcessorTool;
 import com.alibaba.cloud.ai.example.manus.workflow.SummaryWorkflow;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -283,6 +284,8 @@ public class PlanningFactory implements IPlanningFactory {
 			toolDefinitions.add(new FinalizeTool(planId, manusProperties, sharedStateManager, unifiedDirectoryManager));
 			toolDefinitions.add(new CronTool(cronService, objectMapper));
 			toolDefinitions.add(new ExcelProcessorTool(excelProcessingService));
+			toolDefinitions.add(new DataProcessorTool(planId, unifiedDirectoryManager, innerStorageService,
+					sharedStateManager, manusProperties, objectMapper));
 		}
 		else {
 			toolDefinitions.add(new TerminateTool(planId, expectedReturnInfo));
