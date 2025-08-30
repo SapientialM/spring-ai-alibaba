@@ -22,7 +22,7 @@ public enum AgentEnum {
 
 	DEFAULT_AGENT("DEFAULT_AGENT", "default_agent"), BROWSER_AGENT("BROWSER_AGENT", "browser_agent"),
 	DATABASE_AGENT("DATABASE_AGENT", "database_agent"), TEXT_FILE_AGENT("TEXT_FILE_AGENT", "text_file_agent"),
-	CRON_AGENT("CRON_AGENT", "cron_agent"),
+	CRON_AGENT("CRON_AGENT", "cron_agent"), DATA_COLLECTION_AGENT("DATA_COLLECTION_AGENT", "data_collection_agent"),
 	MAPREDUCE_DATA_PREPARE_AGENT("MAPREDUCE_DATA_PREPARE_AGENT", "mapreduce_data_prepare_agent"),
 	MAPREDUCE_FIN_AGENT("MAPREDUCE_FIN_AGENT", "mapreduce_fin_agent"),
 	MAPREDUCE_MAP_TASK_AGENT("MAPREDUCE_MAP_TASK_AGENT", "mapreduce_map_task_agent"),

@@ -430,15 +430,18 @@ public class ExcelProcessorTool extends AbstractBaseTool<ExcelProcessorTool.Exce
 	@Override
 	public ToolExecuteResult run(ExcelInput input) {
 		try {
-			// Validate input
+			// Enhanced input validation with logging
 			if (input == null) {
+				log.error("ExcelProcessorTool: Input is null");
 				return failure("Input cannot be null");
 			}
 
 			String action = input.getAction();
 			if (action == null || action.trim().isEmpty()) {
+				log.error("ExcelProcessorTool: Action is null or empty");
 				return failure("Action is required");
 			}
+			log.info("ExcelProcessorTool: Processing action: {}", action);
 
 			if (!SUPPORTED_ACTIONS.contains(action)) {
 				return failure("Unsupported action: " + action + ". Supported actions: " + SUPPORTED_ACTIONS);
@@ -446,8 +449,10 @@ public class ExcelProcessorTool extends AbstractBaseTool<ExcelProcessorTool.Exce
 
 			String filePath = input.getFilePath();
 			if (filePath == null || filePath.trim().isEmpty()) {
+				log.error("ExcelProcessorTool: File path is null or empty");
 				return failure("File path is required");
 			}
+			log.info("ExcelProcessorTool: Processing file path: {}", filePath);
 
 			// Check file type support (skip for read_csv action)
 			if (!"read_csv".equals(action) && !excelProcessingService.isSupportedFileType(filePath)) {
@@ -506,12 +511,58 @@ public class ExcelProcessorTool extends AbstractBaseTool<ExcelProcessorTool.Exce
 	}
 
 	private ToolExecuteResult handleCreateFile(ExcelInput input) throws IOException {
+		String filePath = input.getFilePath();
+		log.info("ExcelProcessorTool: Starting create file operation for: {}", filePath);
+
+		if (filePath == null || filePath.trim().isEmpty()) {
+			log.error("ExcelProcessorTool: File path is required for create_file operation");
+			return failure("File path is required");
+		}
+
+		// Validate file extension
+		if (!filePath.toLowerCase().endsWith(".xlsx") && !filePath.toLowerCase().endsWith(".xls")) {
+			log.error("ExcelProcessorTool: Invalid file extension for create_file: {}", filePath);
+			return failure("File must have .xlsx or .xls extension");
+		}
+
+		// Ensure parent directory exists
+		try {
+			java.nio.file.Path path = java.nio.file.Paths.get(filePath);
+			java.nio.file.Path parentDir = path.getParent();
+			if (parentDir != null && !java.nio.file.Files.exists(parentDir)) {
+				log.info("ExcelProcessorTool: Creating parent directory: {}", parentDir.toString());
+				java.nio.file.Files.createDirectories(parentDir);
+			}
+		}
+		catch (Exception e) {
+			log.error("ExcelProcessorTool: Failed to create parent directory for {}: {}", filePath, e.getMessage());
+			return failure("Failed to create parent directory: " + e.getMessage());
+		}
+
 		Map<String, List<String>> worksheets = input.getWorksheets();
 		if (worksheets == null || worksheets.isEmpty()) {
+			log.error("ExcelProcessorTool: Worksheets configuration is required for create_file action");
 			return failure("Worksheets configuration is required for create_file action");
 		}
 
-		excelProcessingService.createExcelFile(currentPlanId, input.getFilePath(), worksheets);
+		try {
+			log.info("ExcelProcessorTool: Creating Excel file with {} worksheets", worksheets.size());
+			excelProcessingService.createExcelFile(currentPlanId, input.getFilePath(), worksheets);
+
+			// Verify file was created
+			java.io.File createdFile = new java.io.File(filePath);
+			if (createdFile.exists() && createdFile.length() > 0) {
+				log.info("ExcelProcessorTool: File creation verified successfully: {} (size: {} bytes)", filePath,
+						createdFile.length());
+			}
+			else {
+				log.warn("ExcelProcessorTool: File creation verification failed or file is empty: {}", filePath);
+			}
+		}
+		catch (Exception e) {
+			log.error("ExcelProcessorTool: Failed to create Excel file {}: {}", filePath, e.getMessage());
+			return failure("Failed to create Excel file: " + e.getMessage());
+		}
 
 		Map<String, Object> result = new HashMap<>();
 		result.put("action", "create_file");
@@ -1325,21 +1376,32 @@ public class ExcelProcessorTool extends AbstractBaseTool<ExcelProcessorTool.Exce
 
 	private ToolExecuteResult handleReadCsv(ExcelInput input) throws IOException {
 		String csvFilePath = input.getFilePath();
+		log.info("ExcelProcessorTool: Starting CSV read operation for file: {}", csvFilePath);
+
 		if (csvFilePath == null || csvFilePath.trim().isEmpty()) {
 			return failure("CSV file path is required");
 		}
 
-		// Validate CSV file extension
+		// Enhanced file path validation
 		if (!csvFilePath.toLowerCase().endsWith(".csv")) {
+			log.error("ExcelProcessorTool: Invalid file extension, expected .csv: {}", csvFilePath);
 			return failure("File must have .csv extension");
 		}
 
 		try {
-			// Read CSV file
+			// Read CSV file with enhanced error handling
 			List<List<String>> csvData = readCsvFile(csvFilePath);
+			if (csvData == null) {
+				log.error("ExcelProcessorTool: Failed to read CSV file: {}", csvFilePath);
+				return failure("Failed to read CSV file");
+			}
+
 			if (csvData.isEmpty()) {
+				log.warn("ExcelProcessorTool: CSV file is empty: {}", csvFilePath);
 				return failure("CSV file is empty or could not be read");
 			}
+
+			log.info("ExcelProcessorTool: Successfully read {} rows from CSV file", csvData.size());
 
 			// Prepare result data
 			Map<String, Object> resultData = new HashMap<>();
@@ -1377,7 +1439,9 @@ public class ExcelProcessorTool extends AbstractBaseTool<ExcelProcessorTool.Exce
 				resultData.put("converted_to_excel", true);
 			}
 
-			return success("CSV file read successfully", resultData);
+			String successMessage = "CSV file read successfully";
+			log.info("ExcelProcessorTool: CSV read operation completed successfully");
+			return success(successMessage, resultData);
 
 		}
 		catch (Exception e) {
@@ -1388,50 +1452,111 @@ public class ExcelProcessorTool extends AbstractBaseTool<ExcelProcessorTool.Exce
 
 	private List<List<String>> readCsvFile(String csvFilePath) throws IOException {
 		List<List<String>> data = new ArrayList<>();
-		try (java.io.BufferedReader reader = java.nio.file.Files
-			.newBufferedReader(java.nio.file.Paths.get(csvFilePath))) {
-			String line;
-			while ((line = reader.readLine()) != null) {
-				// Simple CSV parsing - handles basic comma separation
-				// For more complex CSV parsing, consider using a dedicated CSV library
-				List<String> row = parseCsvLine(line);
-				data.add(row);
+
+		try {
+			// Validate file path and existence
+			java.nio.file.Path path = java.nio.file.Paths.get(csvFilePath);
+			if (!java.nio.file.Files.exists(path)) {
+				log.error("ExcelProcessorTool: CSV file does not exist: {}", csvFilePath);
+				// Check if parent directory exists
+				java.nio.file.Path parentDir = path.getParent();
+				if (parentDir != null && !java.nio.file.Files.exists(parentDir)) {
+					log.error("ExcelProcessorTool: Parent directory does not exist: {}", parentDir.toString());
+				}
+				return null;
+			}
+
+			if (!java.nio.file.Files.isReadable(path)) {
+				log.error("ExcelProcessorTool: CSV file is not readable: {}", csvFilePath);
+				return null;
+			}
+
+			log.info("ExcelProcessorTool: Reading CSV file: {}", csvFilePath);
+
+			try (java.io.BufferedReader reader = java.nio.file.Files.newBufferedReader(path)) {
+				String line;
+				int lineNumber = 0;
+				while ((line = reader.readLine()) != null) {
+					lineNumber++;
+					try {
+						// Simple CSV parsing - handles basic comma separation
+						// For more complex CSV parsing, consider using a dedicated CSV
+						// library
+						List<String> row = parseCsvLine(line);
+						data.add(row);
+					}
+					catch (Exception e) {
+						log.warn("ExcelProcessorTool: Error parsing CSV line {}: {}", lineNumber, e.getMessage());
+						// Continue processing other lines
+					}
+				}
+
+				log.info("ExcelProcessorTool: Successfully parsed {} lines from CSV file", lineNumber);
 			}
 		}
+		catch (IOException e) {
+			log.error("ExcelProcessorTool: IOException while reading CSV file {}: {}", csvFilePath, e.getMessage());
+			throw e;
+		}
+		catch (Exception e) {
+			log.error("ExcelProcessorTool: Unexpected error while reading CSV file {}: {}", csvFilePath,
+					e.getMessage());
+			return null;
+		}
+
 		return data;
 	}
 
 	private List<String> parseCsvLine(String line) {
 		List<String> result = new ArrayList<>();
+
+		if (line == null) {
+			log.warn("ExcelProcessorTool: Null line encountered during CSV parsing");
+			return result;
+		}
+
+		if (line.trim().isEmpty()) {
+			log.debug("ExcelProcessorTool: Empty line encountered during CSV parsing");
+			return result;
+		}
+
 		boolean inQuotes = false;
 		StringBuilder currentField = new StringBuilder();
 
-		for (int i = 0; i < line.length(); i++) {
-			char c = line.charAt(i);
+		try {
+			for (int i = 0; i < line.length(); i++) {
+				char c = line.charAt(i);
 
-			if (c == '"') {
-				if (inQuotes && i + 1 < line.length() && line.charAt(i + 1) == '"') {
-					// Escaped quote
-					currentField.append('"');
-					i++; // Skip next quote
+				if (c == '"') {
+					if (inQuotes && i + 1 < line.length() && line.charAt(i + 1) == '"') {
+						// Escaped quote
+						currentField.append('"');
+						i++; // Skip next quote
+					}
+					else {
+						// Toggle quote state
+						inQuotes = !inQuotes;
+					}
+				}
+				else if (c == ',' && !inQuotes) {
+					// Field separator
+					result.add(currentField.toString().trim());
+					currentField = new StringBuilder();
 				}
 				else {
-					// Toggle quote state
-					inQuotes = !inQuotes;
+					currentField.append(c);
 				}
 			}
-			else if (c == ',' && !inQuotes) {
-				// Field separator
-				result.add(currentField.toString().trim());
-				currentField = new StringBuilder();
-			}
-			else {
-				currentField.append(c);
-			}
+
+			// Add the last field
+			result.add(currentField.toString().trim());
+
+		}
+		catch (Exception e) {
+			log.error("ExcelProcessorTool: Error parsing CSV line '{}': {}", line, e.getMessage());
+			throw new RuntimeException("Failed to parse CSV line: " + e.getMessage(), e);
 		}
 
-		// Add the last field
-		result.add(currentField.toString().trim());
 		return result;
 	}
 

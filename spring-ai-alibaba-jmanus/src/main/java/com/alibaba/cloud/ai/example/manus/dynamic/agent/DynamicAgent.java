@@ -522,6 +522,15 @@ public class DynamicAgent extends ReActAgent {
 		Map<String, Object> data = new HashMap<>();
 		data.putAll(getInitSettingData());
 		data.put(PlanExecutor.EXECUTION_ENV_STRING_KEY, convertEnvDataToString());
+
+		// Add planId and rootPlanId to template variables
+		if (getCurrentPlanId() != null) {
+			data.put("planId", getCurrentPlanId());
+		}
+		if (getRootPlanId() != null) {
+			data.put("rootPlanId", getRootPlanId());
+		}
+
 		return data;
 	}
 

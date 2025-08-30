@@ -19,6 +19,7 @@ import java.io.*;
 import java.nio.file.*;
 import java.util.*;
 import java.util.stream.Collectors;
+import java.util.Optional;
 
 import com.alibaba.cloud.ai.example.manus.tool.AbstractBaseTool;
 import com.alibaba.cloud.ai.example.manus.tool.TerminableTool;
@@ -53,24 +54,48 @@ public class DataProcessorTool extends AbstractBaseTool<DataProcessorTool.DataPr
 	private static final String TOOL_NAME = "data_processor_tool";
 
 	private static final String TOOL_DESCRIPTION = """
-			Data Processor Tool - A universal data processing tool specifically designed for organizing web search information
+			Data Processor Tool - A universal data processing tool specifically designed for organizing web search information and preparing data for Excel processing
 
 			Main Features:
 			1. Intelligent Data Collection: Automatically collect data obtained by Browser tool from inner_storage
 			2. Data Cleaning and Structuring: Support cleaning and structuring of various data formats
-			3. Format Conversion: Support output in markdown, CSV and other formats
+			3. Format Conversion: Support output in markdown, CSV and JSON formats
+
+			PATH USAGE GUIDELINES:
+			- source_path: Use relative paths like 'plan-{planId}' or leave empty for auto-detection
+			- output_path: Use relative paths like 'output.csv' or 'results/data.csv'
+			- All paths are resolved relative to the inner_storage directory
+			- Absolute paths are NOT recommended and may cause security errors
+			- When source_path is empty, tool automatically uses current plan's inner_storage path
 			4. Batch Processing: Support batch processing and aggregation of large amounts of data
+			5. Excel Integration: Optimized CSV output format for seamless integration with ExcelProcessorTool
 
 			Supported Operations:
-			- process_inner_storage_data: Process data in inner_storage
-			- clean_and_structure: Clean and structure data
-			- convert_format: Convert data format
-			- extract_structured_info: Extract structured information
+			- process_inner_storage_data: Process data in inner_storage and output structured data
+			- clean_and_structure: Clean and structure data with customizable rules
+			- convert_format: Convert data format between markdown, CSV, and JSON
+			- extract_structured_info: Extract structured information with field mapping
 
 			Output Formats:
-			- markdown: Format suitable for reading and further editing
-			- csv: Format suitable for data analysis and Excel processing
-			- json: Structured format suitable for program processing
+			- markdown: Human-readable format suitable for documentation and further editing
+			- csv: Structured tabular format optimized for Excel processing and data analysis
+			  * CSV output includes proper headers and data formatting
+			  * Compatible with ExcelProcessorTool's read_csv operation
+			  * Supports UTF-8 encoding for international characters
+			- json: Structured format suitable for program processing and API integration
+
+			Excel Integration Workflow:
+			1. Use 'process_inner_storage_data' with output_format='csv' to process browser-collected data
+			2. Specify output_path to save CSV file in accessible location (e.g., 'extensions/processed_data.csv')
+			3. Use ExcelProcessorTool's 'read_csv' operation to convert CSV to Excel format
+			4. ExcelProcessorTool can then perform additional Excel-specific operations (formatting, formulas, etc.)
+
+			Recommended Parameters for Excel Integration:
+			- action: 'process_inner_storage_data'
+			- output_format: 'csv'
+			- output_path: 'extensions/temp_data.csv' (or similar accessible path)
+			- extraction_fields: [list of column names for structured output]
+			- structure_template: 'column1,column2,column3' (CSV header format)
 			""";
 
 	/**
@@ -258,18 +283,18 @@ public class DataProcessorTool extends AbstractBaseTool<DataProcessorTool.DataPr
 				            "description": "Data processing operation to execute"
 				        },
 				        "source_path": {
-				            "type": "string",
-				            "description": "Source data path, can be inner_storage path or specific file path"
-				        },
+				        "type": "string",
+				        "description": "Source path for data processing. Use relative paths like 'plan-{planId}' or leave empty for auto-detection. Resolved relative to inner_storage directory."
+				    },
 				        "output_format": {
 				            "type": "string",
 				            "enum": ["markdown", "csv", "json"],
 				            "description": "Output format"
 				        },
 				        "output_path": {
-				            "type": "string",
-				            "description": "Output file path (optional)"
-				        },
+				        "type": "string",
+				        "description": "Output path for processed data. Use relative paths like 'output.csv' or 'results/data.csv'. Resolved relative to inner_storage directory."
+				    },
 				        "extraction_fields": {
 				            "type": "array",
 				            "items": {
@@ -296,10 +321,22 @@ public class DataProcessorTool extends AbstractBaseTool<DataProcessorTool.DataPr
 
 	@Override
 	public ToolExecuteResult run(DataProcessorInput input) {
-		log.info("DataProcessorTool executing with action: {}", input.getAction());
-
 		try {
-			switch (input.getAction()) {
+			// Validate input
+			if (input == null) {
+				log.error("DataProcessorTool: Input is null");
+				return new ToolExecuteResult("Error: Input cannot be null");
+			}
+
+			String action = input.getAction();
+			if (action == null || action.trim().isEmpty()) {
+				log.error("DataProcessorTool: Action is null or empty");
+				return new ToolExecuteResult("Error: Action is required");
+			}
+
+			log.info("DataProcessorTool executing with action: {}", action);
+
+			switch (action) {
 				case "process_inner_storage_data":
 					return processInnerStorageData(input);
 				case "clean_and_structure":
@@ -309,7 +346,9 @@ public class DataProcessorTool extends AbstractBaseTool<DataProcessorTool.DataPr
 				case "extract_structured_info":
 					return extractStructuredInfo(input);
 				default:
-					return new ToolExecuteResult("Error: Unsupported action: " + input.getAction());
+					log.error("DataProcessorTool: Unsupported action: {}", action);
+					return new ToolExecuteResult("Error: Unsupported action: " + action
+							+ ". Supported actions: process_inner_storage_data, clean_and_structure, convert_format, extract_structured_info");
 			}
 		}
 		catch (Exception e) {
@@ -324,51 +363,127 @@ public class DataProcessorTool extends AbstractBaseTool<DataProcessorTool.DataPr
 	 * 处理inner_storage中的数据
 	 */
 	private ToolExecuteResult processInnerStorageData(DataProcessorInput input) throws Exception {
-		String sourcePath = input.getSourcePath();
-		if (sourcePath == null || sourcePath.trim().isEmpty()) {
-			// 默认使用当前计划的inner_storage路径
-			sourcePath = getInnerStorageRoot().resolve(currentPlanId).toString();
-		}
+		try {
+			log.info("Processing inner storage data");
 
-		Path sourceDir = Paths.get(sourcePath);
-		if (!Files.exists(sourceDir)) {
-			return new ToolExecuteResult("Error: Source path does not exist: " + sourcePath);
-		}
+			// Validate and normalize source path
+			String sourcePath = validateAndNormalizePath(input.getSourcePath(), false);
 
-		// 使用MapReduce工具链处理数据
-		return executeMapReduceWorkflow(sourceDir, input);
+			// If no source path provided, try to infer the best one
+			if (sourcePath == null || sourcePath.isEmpty()) {
+				sourcePath = inferBestSourcePath();
+				if (sourcePath == null) {
+					log.error("No source path specified and unable to auto-detect");
+					return new ToolExecuteResult("Error: No source path specified and unable to auto-detect. "
+							+ "Available paths in inner_storage: " + listAvailablePaths(getInnerStorageRoot()) + ". "
+							+ "Please specify source_path parameter with a relative path like 'plan-{planId}'.");
+				}
+				log.info("Auto-detected source path: {}", sourcePath);
+			}
+
+			Path resolvedSourcePath;
+			if (Paths.get(sourcePath).isAbsolute()) {
+				// Validate absolute path must be within inner_storage directory
+				Path innerStorageRoot = getInnerStorageRoot();
+				Path absolutePath = Paths.get(sourcePath);
+				if (!absolutePath.startsWith(innerStorageRoot)) {
+					return new ToolExecuteResult("Error: Absolute path must be within inner_storage directory. "
+							+ "Expected path under: " + innerStorageRoot + ", but got: " + absolutePath + ". "
+							+ "Please use relative paths like 'plan-{planId}' or leave source_path empty for auto-detection.");
+				}
+				resolvedSourcePath = absolutePath;
+			}
+			else {
+				// Relative path resolved to inner_storage directory
+				resolvedSourcePath = getInnerStorageRoot().resolve(sourcePath);
+			}
+
+			if (!Files.exists(resolvedSourcePath)) {
+				log.error("Source path does not exist: {}", resolvedSourcePath);
+				return new ToolExecuteResult("Error: Source path does not exist: " + resolvedSourcePath + ". "
+						+ "Expected path: " + sourcePath + ". "
+						+ "Please use relative paths like 'plan-{planId}' or leave source_path empty for auto-detection. "
+						+ "Available paths in inner_storage: " + listAvailablePaths(getInnerStorageRoot()));
+			}
+
+			if (!Files.isDirectory(resolvedSourcePath)) {
+				log.error("Source path is not a directory: {}", resolvedSourcePath);
+				return new ToolExecuteResult("Error: Source path is not a directory: " + resolvedSourcePath + ". "
+						+ "Expected a directory containing data files.");
+			}
+
+			// Check if directory contains any data files
+			List<String> dataFiles = collectDataFiles(resolvedSourcePath);
+			if (dataFiles.isEmpty()) {
+				log.warn("No data files found in source directory: {}", resolvedSourcePath);
+				return new ToolExecuteResult("Warning: No data files found in source directory: " + resolvedSourcePath
+						+ ". " + "Supported file types: .md, .txt, .csv, .json, .html");
+			}
+
+			log.info("Found {} data files in source directory", dataFiles.size());
+			return executeMapReduceWorkflow(resolvedSourcePath, input);
+
+		}
+		catch (IllegalArgumentException e) {
+			return new ToolExecuteResult("Error: Invalid path parameter - " + e.getMessage());
+		}
 	}
 
 	/**
 	 * 清洗和结构化数据
 	 */
 	private ToolExecuteResult cleanAndStructureData(DataProcessorInput input) throws Exception {
-		// 实现数据清洗逻辑
-		String sourcePath = input.getSourcePath();
-		Path sourceFile = Paths.get(sourcePath);
+		try {
+			log.info("Cleaning and structuring data");
 
-		if (!Files.exists(sourceFile)) {
-			return new ToolExecuteResult("Error: Source file does not exist: " + sourcePath);
+			// 实现数据清洗逻辑
+			String sourcePath = validateAndNormalizePath(input.getSourcePath(), false);
+			if (sourcePath == null || sourcePath.isEmpty()) {
+				log.error("Source path is required for clean and structure operation");
+				return new ToolExecuteResult("Error: Source path is required for clean and structure operation");
+			}
+
+			Path sourceFile = getInnerStorageRoot().resolve(sourcePath);
+
+			if (!Files.exists(sourceFile)) {
+				log.error("Source file does not exist: {}", sourceFile);
+				return new ToolExecuteResult("Error: Source file does not exist: " + sourceFile);
+			}
+
+			if (!Files.isRegularFile(sourceFile)) {
+				log.error("Source path is not a regular file: {}", sourceFile);
+				return new ToolExecuteResult("Error: Source path is not a regular file: " + sourceFile);
+			}
+
+			// 读取文件内容
+			String content = Files.readString(sourceFile);
+
+			// 应用清洗规则
+			String cleanedContent = applyCleaningRules(content, input.getCleaningRules());
+
+			// 结构化数据
+			String structuredContent = structureData(cleanedContent, input.getStructureTemplate(),
+					input.getExtractionFields());
+
+			// 保存结果
+			String outputPath = validateAndNormalizePath(input.getOutputPath(), true);
+			if (outputPath != null && !outputPath.trim().isEmpty()) {
+				Path resolvedOutputPath = getInnerStorageRoot().resolve(outputPath);
+				// Ensure output directory exists
+				Files.createDirectories(resolvedOutputPath.getParent());
+				Files.writeString(resolvedOutputPath, structuredContent);
+				log.info("Data cleaned and structured successfully. Output saved to: {}", resolvedOutputPath);
+				return new ToolExecuteResult(
+						"Data cleaned and structured successfully. Output saved to: " + resolvedOutputPath);
+			}
+			else {
+				log.info("Data cleaned and structured successfully, returning content directly");
+				return new ToolExecuteResult("Data cleaned and structured successfully:\n" + structuredContent);
+			}
 		}
-
-		// 读取文件内容
-		String content = Files.readString(sourceFile);
-
-		// 应用清洗规则
-		String cleanedContent = applyCleaningRules(content, input.getCleaningRules());
-
-		// 结构化数据
-		String structuredContent = structureData(cleanedContent, input.getStructureTemplate(),
-				input.getExtractionFields());
-
-		// 保存结果
-		String outputPath = input.getOutputPath();
-		if (outputPath != null && !outputPath.trim().isEmpty()) {
-			Files.writeString(Paths.get(outputPath), structuredContent);
-			return new ToolExecuteResult("Data cleaned and structured successfully. Output saved to: " + outputPath);
-		}
-		else {
-			return new ToolExecuteResult("Data cleaned and structured successfully:\n" + structuredContent);
+		catch (IllegalArgumentException e) {
+			log.error("Invalid path parameter: {}", e.getMessage());
+			return new ToolExecuteResult("Error: Invalid path parameter - " + e.getMessage());
 		}
 	}
 
@@ -376,24 +491,53 @@ public class DataProcessorTool extends AbstractBaseTool<DataProcessorTool.DataPr
 	 * 转换数据格式
 	 */
 	private ToolExecuteResult convertFormat(DataProcessorInput input) throws Exception {
-		String sourcePath = input.getSourcePath();
-		String outputFormat = input.getOutputFormat();
-		String outputPath = input.getOutputPath();
+		try {
+			log.info("Converting data format");
 
-		Path sourceFile = Paths.get(sourcePath);
-		if (!Files.exists(sourceFile)) {
-			return new ToolExecuteResult("Error: Source file does not exist: " + sourcePath);
+			String sourcePath = validateAndNormalizePath(input.getSourcePath(), false);
+			if (sourcePath == null || sourcePath.isEmpty()) {
+				log.error("Source path is required for format conversion");
+				return new ToolExecuteResult("Error: Source path is required for format conversion");
+			}
+
+			String outputFormat = input.getOutputFormat();
+			if (outputFormat == null || outputFormat.trim().isEmpty()) {
+				log.error("Output format is required for format conversion");
+				return new ToolExecuteResult("Error: Output format is required for format conversion");
+			}
+
+			String outputPath = validateAndNormalizePath(input.getOutputPath(), true);
+
+			Path sourceFile = getInnerStorageRoot().resolve(sourcePath);
+			if (!Files.exists(sourceFile)) {
+				log.error("Source file does not exist: {}", sourceFile);
+				return new ToolExecuteResult("Error: Source file does not exist: " + sourceFile);
+			}
+
+			if (!Files.isRegularFile(sourceFile)) {
+				log.error("Source path is not a regular file: {}", sourceFile);
+				return new ToolExecuteResult("Error: Source path is not a regular file: " + sourceFile);
+			}
+
+			String content = Files.readString(sourceFile);
+			String convertedContent = convertToFormat(content, outputFormat);
+
+			if (outputPath != null && !outputPath.trim().isEmpty()) {
+				Path resolvedOutputPath = getInnerStorageRoot().resolve(outputPath);
+				// Ensure output directory exists
+				Files.createDirectories(resolvedOutputPath.getParent());
+				Files.writeString(resolvedOutputPath, convertedContent);
+				log.info("Format converted successfully. Output saved to: {}", resolvedOutputPath);
+				return new ToolExecuteResult("Format converted successfully. Output saved to: " + resolvedOutputPath);
+			}
+			else {
+				log.info("Format converted successfully, returning content directly");
+				return new ToolExecuteResult("Format converted successfully:\n" + convertedContent);
+			}
 		}
-
-		String content = Files.readString(sourceFile);
-		String convertedContent = convertToFormat(content, outputFormat);
-
-		if (outputPath != null && !outputPath.trim().isEmpty()) {
-			Files.writeString(Paths.get(outputPath), convertedContent);
-			return new ToolExecuteResult("Format converted successfully. Output saved to: " + outputPath);
-		}
-		else {
-			return new ToolExecuteResult("Format converted successfully:\n" + convertedContent);
+		catch (IllegalArgumentException e) {
+			log.error("Invalid path parameter: {}", e.getMessage());
+			return new ToolExecuteResult("Error: Invalid path parameter - " + e.getMessage());
 		}
 	}
 
@@ -401,28 +545,56 @@ public class DataProcessorTool extends AbstractBaseTool<DataProcessorTool.DataPr
 	 * 提取结构化信息
 	 */
 	private ToolExecuteResult extractStructuredInfo(DataProcessorInput input) throws Exception {
-		String sourcePath = input.getSourcePath();
-		List<String> extractionFields = input.getExtractionFields();
+		try {
+			log.info("Extracting structured information");
 
-		Path sourceFile = Paths.get(sourcePath);
-		if (!Files.exists(sourceFile)) {
-			return new ToolExecuteResult("Error: Source file does not exist: " + sourcePath);
+			String sourcePath = validateAndNormalizePath(input.getSourcePath(), false);
+			if (sourcePath == null || sourcePath.isEmpty()) {
+				log.error("Source path is required for structured info extraction");
+				return new ToolExecuteResult("Error: Source path is required for structured info extraction");
+			}
+
+			List<String> extractionFields = input.getExtractionFields();
+			if (extractionFields == null || extractionFields.isEmpty()) {
+				log.error("Extraction fields are required for structured info extraction");
+				return new ToolExecuteResult("Error: Extraction fields are required for structured info extraction");
+			}
+
+			Path sourceFile = getInnerStorageRoot().resolve(sourcePath);
+			if (!Files.exists(sourceFile)) {
+				log.error("Source file does not exist: {}", sourceFile);
+				return new ToolExecuteResult("Error: Source file does not exist: " + sourceFile);
+			}
+
+			if (!Files.isRegularFile(sourceFile)) {
+				log.error("Source path is not a regular file: {}", sourceFile);
+				return new ToolExecuteResult("Error: Source path is not a regular file: " + sourceFile);
+			}
+
+			String content = Files.readString(sourceFile);
+			Map<String, Object> extractedData = extractFields(content, extractionFields);
+
+			String outputFormat = input.getOutputFormat() != null ? input.getOutputFormat() : "json";
+			String formattedOutput = formatExtractedData(extractedData, outputFormat);
+
+			String outputPath = validateAndNormalizePath(input.getOutputPath(), true);
+			if (outputPath != null && !outputPath.trim().isEmpty()) {
+				Path resolvedOutputPath = getInnerStorageRoot().resolve(outputPath);
+				// Ensure output directory exists
+				Files.createDirectories(resolvedOutputPath.getParent());
+				Files.writeString(resolvedOutputPath, formattedOutput);
+				log.info("Structured information extracted successfully. Output saved to: {}", resolvedOutputPath);
+				return new ToolExecuteResult(
+						"Structured information extracted successfully. Output saved to: " + resolvedOutputPath);
+			}
+			else {
+				log.info("Structured information extracted successfully, returning content directly");
+				return new ToolExecuteResult("Structured information extracted successfully:\n" + formattedOutput);
+			}
 		}
-
-		String content = Files.readString(sourceFile);
-		Map<String, Object> extractedData = extractFields(content, extractionFields);
-
-		String outputFormat = input.getOutputFormat() != null ? input.getOutputFormat() : "json";
-		String formattedOutput = formatExtractedData(extractedData, outputFormat);
-
-		String outputPath = input.getOutputPath();
-		if (outputPath != null && !outputPath.trim().isEmpty()) {
-			Files.writeString(Paths.get(outputPath), formattedOutput);
-			return new ToolExecuteResult(
-					"Structured information extracted successfully. Output saved to: " + outputPath);
-		}
-		else {
-			return new ToolExecuteResult("Structured information extracted successfully:\n" + formattedOutput);
+		catch (IllegalArgumentException e) {
+			log.error("Invalid path parameter: {}", e.getMessage());
+			return new ToolExecuteResult("Error: Invalid path parameter - " + e.getMessage());
 		}
 	}
 
@@ -451,14 +623,41 @@ public class DataProcessorTool extends AbstractBaseTool<DataProcessorTool.DataPr
 		// 4. 格式化输出
 		String finalOutput = formatFinalOutput(aggregatedResult, input.getOutputFormat());
 
-		// 5. 保存结果
-		String outputPath = input.getOutputPath();
-		if (outputPath != null && !outputPath.trim().isEmpty()) {
-			Files.writeString(Paths.get(outputPath), finalOutput);
-			this.lastProcessingResult = "Data processed successfully. Output saved to: " + outputPath;
+		// 5. Save results with intelligent path handling
+		try {
+			String outputPath = validateAndNormalizePath(input.getOutputPath(), true);
+			if (outputPath != null && !outputPath.isEmpty()) {
+				Path resolvedOutputPath;
+				if (Paths.get(outputPath).isAbsolute()) {
+					// Validate absolute path must be within inner_storage directory
+					Path innerStorageRoot = getInnerStorageRoot();
+					Path absolutePath = Paths.get(outputPath);
+					if (!absolutePath.startsWith(innerStorageRoot)) {
+						return new ToolExecuteResult("Error: Absolute path must be within inner_storage directory. "
+								+ "Expected path under: " + innerStorageRoot + ", but got: " + absolutePath + ". "
+								+ "Please use relative paths like 'output.csv' or 'results/data.csv'.");
+					}
+					resolvedOutputPath = absolutePath;
+				}
+				else {
+					// Relative path resolved to inner_storage directory
+					resolvedOutputPath = getInnerStorageRoot().resolve(outputPath);
+				}
+
+				// Ensure output directory exists
+				Files.createDirectories(resolvedOutputPath.getParent());
+
+				Files.writeString(resolvedOutputPath, finalOutput);
+				this.lastProcessingResult = "Data processed successfully. Output saved to: " + resolvedOutputPath;
+				log.info("Data processing completed. Output saved to: {}", resolvedOutputPath);
+			}
+			else {
+				this.lastProcessingResult = "Data processed successfully:\n" + finalOutput;
+				log.info("Data processing completed. No output file specified, returning results directly.");
+			}
 		}
-		else {
-			this.lastProcessingResult = "Data processed successfully:\n" + finalOutput;
+		catch (IllegalArgumentException e) {
+			return new ToolExecuteResult("Error: Invalid output path - " + e.getMessage());
 		}
 
 		this.processingCompleted = true;
@@ -473,11 +672,32 @@ public class DataProcessorTool extends AbstractBaseTool<DataProcessorTool.DataPr
 	 * 收集数据文件
 	 */
 	private List<String> collectDataFiles(Path sourceDir) throws IOException {
-		return Files.walk(sourceDir)
-			.filter(Files::isRegularFile)
-			.filter(path -> isDataFile(path.toString()))
-			.map(Path::toString)
-			.collect(Collectors.toList());
+		try {
+			log.debug("Collecting data files from directory: {}", sourceDir);
+
+			if (!Files.exists(sourceDir)) {
+				log.warn("Source directory does not exist: {}", sourceDir);
+				return new ArrayList<>();
+			}
+
+			if (!Files.isDirectory(sourceDir)) {
+				log.warn("Source path is not a directory: {}", sourceDir);
+				return new ArrayList<>();
+			}
+
+			List<String> dataFiles = Files.walk(sourceDir)
+				.filter(Files::isRegularFile)
+				.filter(path -> isDataFile(path.toString()))
+				.map(Path::toString)
+				.collect(Collectors.toList());
+
+			log.debug("Found {} data files", dataFiles.size());
+			return dataFiles;
+		}
+		catch (IOException e) {
+			log.error("Error collecting data files from directory: {}", sourceDir, e);
+			throw e;
+		}
 	}
 
 	/**
@@ -494,20 +714,40 @@ public class DataProcessorTool extends AbstractBaseTool<DataProcessorTool.DataPr
 	 * 处理单个数据文件
 	 */
 	private String processDataFile(String filePath, DataProcessorInput input) throws IOException {
-		String content = Files.readString(Paths.get(filePath));
+		try {
+			log.debug("Processing data file: {}", filePath);
 
-		// 应用清洗规则
-		if (input.getCleaningRules() != null) {
-			content = applyCleaningRules(content, input.getCleaningRules());
+			Path file = Paths.get(filePath);
+			if (!Files.exists(file)) {
+				log.warn("Data file does not exist: {}", filePath);
+				return "[File not found: " + filePath + "]";
+			}
+
+			if (!Files.isRegularFile(file)) {
+				log.warn("Path is not a regular file: {}", filePath);
+				return "[Not a regular file: " + filePath + "]";
+			}
+
+			String content = Files.readString(file);
+			log.debug("Successfully read file content, length: {}", content.length());
+
+			// 应用清洗规则
+			if (input.getCleaningRules() != null) {
+				content = applyCleaningRules(content, input.getCleaningRules());
+			}
+
+			// 提取结构化信息
+			if (input.getExtractionFields() != null && !input.getExtractionFields().isEmpty()) {
+				Map<String, Object> extractedData = extractFields(content, input.getExtractionFields());
+				content = objectMapper.writeValueAsString(extractedData);
+			}
+
+			return content;
 		}
-
-		// 提取结构化信息
-		if (input.getExtractionFields() != null && !input.getExtractionFields().isEmpty()) {
-			Map<String, Object> extractedData = extractFields(content, input.getExtractionFields());
-			content = objectMapper.writeValueAsString(extractedData);
+		catch (IOException e) {
+			log.error("Error processing data file: {}", filePath, e);
+			return "[Error reading file " + filePath + ": " + e.getMessage() + "]";
 		}
-
-		return content;
 	}
 
 	/**
@@ -627,16 +867,29 @@ public class DataProcessorTool extends AbstractBaseTool<DataProcessorTool.DataPr
 	 * 转换为CSV格式
 	 */
 	private String convertToCSV(String content) {
-		// 简单的CSV转换实现
-		StringBuilder csv = new StringBuilder();
-		csv.append("Field,Value\n");
+		try {
+			log.debug("Converting content to CSV format");
+			// Enhanced CSV conversion with better structure
+			StringBuilder csv = new StringBuilder();
+			csv.append("Field,Value\n");
 
-		String[] lines = content.split("\n");
-		for (int i = 0; i < lines.length; i++) {
-			csv.append("Line_").append(i + 1).append(",\"").append(lines[i].replace("\"", "\\\"")).append("\"\n");
+			String[] lines = content.split("\n");
+			for (int i = 0; i < lines.length; i++) {
+				String line = lines[i].trim();
+				if (!line.isEmpty()) {
+					// Escape quotes and handle CSV formatting properly
+					String escapedLine = line.replace("\"", "\"\"");
+					csv.append("Line_").append(i + 1).append(",\"").append(escapedLine).append("\"\n");
+				}
+			}
+
+			log.debug("CSV conversion completed successfully");
+			return csv.toString();
 		}
-
-		return csv.toString();
+		catch (Exception e) {
+			log.error("Error converting to CSV format", e);
+			return "Field,Value\n\"Error\",\"Failed to convert content to CSV: " + e.getMessage() + "\"\n";
+		}
 	}
 
 	/**
@@ -727,6 +980,122 @@ public class DataProcessorTool extends AbstractBaseTool<DataProcessorTool.DataPr
 
 	private Path getInnerStorageRoot() {
 		return unifiedDirectoryManager.getInnerStorageRoot();
+	}
+
+	/**
+	 * List available paths in the given directory for error reporting
+	 */
+	private String listAvailablePaths(Path directory) {
+		try {
+			if (!Files.exists(directory) || !Files.isDirectory(directory)) {
+				return "No directories found";
+			}
+
+			List<String> availablePaths = Files.list(directory)
+				.filter(Files::isDirectory)
+				.map(path -> path.getFileName().toString())
+				.limit(10)
+				.collect(Collectors.toList());
+
+			if (availablePaths.isEmpty()) {
+				return "No directories found";
+			}
+
+			return String.join(", ", availablePaths);
+		}
+		catch (IOException e) {
+			return "Unable to list directories: " + e.getMessage();
+		}
+	}
+
+	/**
+	 * Intelligently infer the best source path when not specified Priority: current plan
+	 * directory > most recent directory > first available directory
+	 */
+	private String inferBestSourcePath() {
+		try {
+			Path innerStorageRoot = getInnerStorageRoot();
+			if (!Files.exists(innerStorageRoot) || !Files.isDirectory(innerStorageRoot)) {
+				return null;
+			}
+
+			// Priority 1: Current plan directory
+			String currentPlanPath = "plan-" + currentPlanId;
+			Path currentPlanDir = innerStorageRoot.resolve(currentPlanPath);
+			if (Files.exists(currentPlanDir) && Files.isDirectory(currentPlanDir)) {
+				return currentPlanPath;
+			}
+
+			// Priority 2: Most recent plan directory based on modification time
+			Optional<Path> mostRecentPlan = Files.list(innerStorageRoot)
+				.filter(Files::isDirectory)
+				.filter(path -> path.getFileName().toString().startsWith("plan-"))
+				.max((p1, p2) -> {
+					try {
+						return Files.getLastModifiedTime(p1).compareTo(Files.getLastModifiedTime(p2));
+					}
+					catch (IOException e) {
+						return 0;
+					}
+				});
+
+			if (mostRecentPlan.isPresent()) {
+				return mostRecentPlan.get().getFileName().toString();
+			}
+
+			// Priority 3: First available directory
+			Optional<Path> firstDir = Files.list(innerStorageRoot).filter(Files::isDirectory).findFirst();
+
+			return firstDir.map(path -> path.getFileName().toString()).orElse(null);
+
+		}
+		catch (IOException e) {
+			log.warn("Failed to infer best source path: {}", e.getMessage());
+			return null;
+		}
+	}
+
+	/**
+	 * Validate and normalize path parameter
+	 * @param inputPath Raw path input from user
+	 * @param isOutputPath Whether this is an output path (affects validation rules)
+	 * @return Validated and normalized path relative to inner_storage
+	 */
+	private String validateAndNormalizePath(String inputPath, boolean isOutputPath) {
+		if (inputPath == null || inputPath.trim().isEmpty()) {
+			log.debug("Path is null or empty, returning null");
+			return null;
+		}
+
+		String normalizedPath = inputPath.trim();
+		log.debug("Validating path: {} (isOutputPath: {})", normalizedPath, isOutputPath);
+
+		// Remove leading/trailing slashes for consistency
+		normalizedPath = normalizedPath.replaceAll("^/+|/+$", "");
+
+		// Validate path doesn't contain dangerous patterns
+		if (normalizedPath.contains("..") || normalizedPath.contains("~")) {
+			log.error("Path contains invalid characters: {}", normalizedPath);
+			throw new IllegalArgumentException("Path contains invalid characters (.. or ~): " + normalizedPath);
+		}
+
+		// Validate path doesn't contain null bytes or other dangerous characters
+		if (normalizedPath.contains("\0") || normalizedPath.matches(".*[<>:|?*].*")) {
+			log.error("Path contains forbidden characters: {}", normalizedPath);
+			throw new IllegalArgumentException("Path contains forbidden characters: " + normalizedPath);
+		}
+
+		// For output paths, ensure proper file extension
+		if (isOutputPath && !normalizedPath.isEmpty()) {
+			if (!normalizedPath.contains(".")) {
+				// Auto-append .csv extension if no extension provided
+				normalizedPath += ".csv";
+				log.debug("Auto-appended .csv extension: {}", normalizedPath);
+			}
+		}
+
+		log.debug("Normalized path: {}", normalizedPath);
+		return normalizedPath;
 	}
 
 	// ==================== TerminableTool Implementation ====================
