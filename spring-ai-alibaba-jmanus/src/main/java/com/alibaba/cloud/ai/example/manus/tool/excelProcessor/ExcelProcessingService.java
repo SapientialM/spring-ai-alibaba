@@ -352,6 +352,16 @@ public class ExcelProcessingService implements IExcelProcessingService {
 			}
 
 			int startRowNum = 0;
+			boolean hasExistingHeaders = false;
+
+			// Check if sheet already has headers (first row with data)
+			if (sheet.getPhysicalNumberOfRows() > 0) {
+				Row firstRow = sheet.getRow(0);
+				if (firstRow != null && firstRow.getPhysicalNumberOfCells() > 0) {
+					hasExistingHeaders = true;
+				}
+			}
+
 			if (appendMode) {
 				// In append mode, start after the last row
 				startRowNum = sheet.getLastRowNum() + 1;
@@ -361,18 +371,63 @@ public class ExcelProcessingService implements IExcelProcessingService {
 				}
 			}
 			else {
-				// In overwrite mode, clear existing data in this sheet only
-				for (int i = sheet.getLastRowNum(); i >= 0; i--) {
-					Row row = sheet.getRow(i);
-					if (row != null) {
-						sheet.removeRow(row);
+				// In overwrite mode, intelligently handle headers
+				if (hasExistingHeaders && headers != null && !headers.isEmpty()) {
+					// Check if existing headers match new headers
+					Row existingHeaderRow = sheet.getRow(0);
+					boolean headersMatch = true;
+					if (existingHeaderRow.getPhysicalNumberOfCells() == headers.size()) {
+						for (int j = 0; j < headers.size(); j++) {
+							Cell cell = existingHeaderRow.getCell(j);
+							String existingHeader = cell != null ? getCellValueAsString(cell) : "";
+							if (!headers.get(j).equals(existingHeader)) {
+								headersMatch = false;
+								break;
+							}
+						}
+					}
+					else {
+						headersMatch = false;
+					}
+
+					if (headersMatch) {
+						// Headers match, only clear data rows (keep header row)
+						for (int i = sheet.getLastRowNum(); i >= 1; i--) {
+							Row row = sheet.getRow(i);
+							if (row != null) {
+								sheet.removeRow(row);
+							}
+						}
+						startRowNum = 1; // Start after header row
+						hasExistingHeaders = true;
+					}
+					else {
+						// Headers don't match, clear everything and write new headers
+						for (int i = sheet.getLastRowNum(); i >= 0; i--) {
+							Row row = sheet.getRow(i);
+							if (row != null) {
+								sheet.removeRow(row);
+							}
+						}
+						startRowNum = 0;
+						hasExistingHeaders = false;
 					}
 				}
-				startRowNum = 0;
+				else {
+					// No existing headers or no new headers provided, clear everything
+					for (int i = sheet.getLastRowNum(); i >= 0; i--) {
+Row row = sheet.getRow(i);
+						if (row != null) {
+							sheet.removeRow(row);
+						}
+					}
+					startRowNum = 0;
+					hasExistingHeaders = false;
+				}
 			}
 
-			// Write headers if provided and not in append mode or if sheet is empty
-			if (headers != null && !headers.isEmpty() && (!appendMode || sheet.getPhysicalNumberOfRows() == 0)) {
+			// Write headers if provided and needed
+			if (headers != null && !headers.isEmpty() && !hasExistingHeaders) {
 				Row headerRow = sheet.createRow(startRowNum);
 				for (int j = 0; j < headers.size(); j++) {
 					Cell cell = headerRow.createCell(j);

@@ -37,15 +37,33 @@ public class ExcelProcessorTool extends AbstractBaseTool<ExcelProcessorTool.Exce
 
 	private static final String TOOL_NAME = "excel_processor";
 
-	private static final String TOOL_DESCRIPTION = "Comprehensive Excel processing tool with support for large datasets. Supports creating structured tables with column headers, reading/writing data, searching, formatting, and batch operations. \n\n"
-			+ "NEW FEATURES:\n"
+	private static final String TOOL_DESCRIPTION = "Comprehensive Excel processing tool with intelligent operation mode detection and support for large datasets. Supports creating structured tables with column headers, reading/writing data, searching, formatting, and batch operations. \n\n"
+			+ "INTELLIGENT FEATURES:\n"
+			+ "- Smart Write Mode Detection: Automatically determines whether to append or overwrite data based on file state and header compatibility\n"
+			+ "- Header Preservation: Intelligently preserves existing headers when they match new data structure\n"
+			+ "- Multi-Scenario Support: Handles new file creation, empty sheet filling, data appending, and structure changes seamlessly\n"
 			+ "- Smart Import (smart_import): Automatically detects file formats, infers data types, and applies intelligent column mapping from multiple source files\n"
 			+ "- Enhanced Batch Processing (batch_process): Improved performance with progress tracking and better error handling\n"
 			+ "- CSV File Reading (read_csv): Read CSV files and optionally convert them to Excel format with proper header detection\n\n"
-			+ "USAGE GUIDELINES:\n" + "- Use 'headers' parameter with 'write_data' action to set column names\n"
+			+ "OPERATION MODES (write_data action):\n"
+			+ "- AUTO MODE (default): Tool automatically detects the best operation based on file/worksheet state:\n"
+			+ "  * auto_create_new: Creates new file/worksheet when none exists\n"
+			+ "  * auto_fill_empty: Fills empty existing worksheet with new data and headers\n"
+			+ "  * auto_append_matching: Appends data when headers match existing structure\n"
+			+ "  * auto_overwrite_different: Overwrites when headers don't match existing structure\n"
+			+ "  * auto_append_default: Appends data when no headers provided\n"
+			+ "- EXPLICIT MODE: Set 'append_mode' parameter to true/false to override auto-detection\n\n"
+			+ "USAGE GUIDELINES:\n"
+			+ "- Use 'headers' parameter with 'write_data' action to set column names and enable smart header matching\n"
+			+ "- Leave 'append_mode' unset (null) to enable intelligent auto-detection (recommended)\n"
+			+ "- Set 'append_mode' to true/false only when you need to override the automatic behavior\n"
 			+ "- For creating new files, use 'worksheets' parameter to define sheet structure with column headers\n"
 			+ "- For smart import, use 'source_files' to specify input files, 'auto_detect_format' for format detection, 'column_mapping' for field mapping, and 'data_type_inference' for automatic type conversion\n"
-			+ "- For CSV reading, use 'read_csv' action with 'file_path' pointing to .csv file. Optionally specify 'output_path' to convert to Excel format";
+			+ "- For CSV reading, use 'read_csv' action with 'file_path' pointing to .csv file. Optionally specify 'output_path' to convert to Excel format\n\n"
+			+ "BEST PRACTICES:\n"
+			+ "- Always provide 'headers' when writing structured data to enable intelligent header matching\n"
+			+ "- Use consistent header names across operations for optimal auto-detection\n"
+			+ "- The tool will preserve existing data structure when headers match, preventing accidental data loss";
 
 	// Supported actions
 	private static final Set<String> SUPPORTED_ACTIONS = Set.of("create_file", "create_table", "get_structure",
@@ -603,8 +621,77 @@ public class ExcelProcessorTool extends AbstractBaseTool<ExcelProcessorTool.Exce
 			return failure("Data is required for write_data action");
 		}
 
-		boolean appendMode = input.getAppendMode() != null ? input.getAppendMode() : false;
 		List<String> headers = input.getHeaders();
+		boolean appendMode;
+		String operationMode;
+
+		// Smart mode detection: analyze file and worksheet state
+		if (input.getAppendMode() != null) {
+			// User explicitly specified append mode
+			appendMode = input.getAppendMode();
+			operationMode = appendMode ? "explicit_append" : "explicit_overwrite";
+		}
+		else {
+			// Auto-detect best mode based on file and worksheet state
+			try {
+				// Check if file exists and has structure
+				Map<String, List<String>> structure = excelProcessingService.getExcelStructure(currentPlanId,
+						input.getFilePath());
+
+				if (structure == null || structure.isEmpty() || !structure.containsKey(worksheetName)) {
+					// File doesn't exist or worksheet doesn't exist - create new
+					appendMode = false;
+					operationMode = "auto_create_new";
+				}
+				else {
+					// Worksheet exists, check if it has data
+					List<List<String>> existingData = excelProcessingService.readExcelData(currentPlanId,
+							input.getFilePath(), worksheetName, 0, 1, 2); // Read first 2
+																			// rows
+
+					if (existingData == null || existingData.isEmpty()) {
+						// Worksheet exists but is empty - write new data
+						appendMode = false;
+						operationMode = "auto_fill_empty";
+					}
+					else if (headers != null && !headers.isEmpty() && existingData.size() >= 1) {
+						// Check if headers match existing first row
+						List<String> existingFirstRow = existingData.get(0);
+						boolean headersMatch = existingFirstRow.size() == headers.size();
+						if (headersMatch) {
+							for (int i = 0; i < headers.size(); i++) {
+								if (!headers.get(i).equals(existingFirstRow.get(i))) {
+									headersMatch = false;
+									break;
+								}
+							}
+						}
+
+						if (headersMatch) {
+							// Headers match - append data
+							appendMode = true;
+							operationMode = "auto_append_matching";
+						}
+						else {
+							// Headers don't match - overwrite with new structure
+							appendMode = false;
+							operationMode = "auto_overwrite_different";
+						}
+					}
+					else {
+						// No headers provided or can't determine - default to append
+						appendMode = true;
+						operationMode = "auto_append_default";
+					}
+				}
+			}
+			catch (Exception e) {
+				// If any error in detection, default to safe overwrite mode
+				log.warn("Failed to auto-detect write mode, defaulting to overwrite: {}", e.getMessage());
+				appendMode = false;
+				operationMode = "auto_fallback_overwrite";
+			}
+		}
 
 		// Use new method that supports headers
 		excelProcessingService.writeExcelDataWithHeaders(currentPlanId, input.getFilePath(), worksheetName, data,
@@ -617,6 +704,7 @@ public class ExcelProcessorTool extends AbstractBaseTool<ExcelProcessorTool.Exce
 		result.put("rows_written", data.size());
 		result.put("headers_included", headers != null && !headers.isEmpty());
 		result.put("append_mode", appendMode);
+		result.put("operation_mode", operationMode);
 		result.put("status", "success");
 
 		return success("Excel data written successfully", result);
