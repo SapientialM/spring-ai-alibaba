@@ -5,6 +5,7 @@ builtIn: false
 availableToolKeys:
   - text_file_operator
   - uploaded_file_loader
+  - inner_storage_content_tool
   - terminate
 
 # Next Step Prompt Configuration
@@ -27,9 +28,10 @@ nextStepPrompt: |
 
   🔧 FUNCTION CALLING RULES:
   - You MUST use function calls in your response
-  - Available functions: uploaded_file_loader, text_file_operator, terminate
+  - Available functions: uploaded_file_loader, text_file_operator, inner_storage_content_tool, terminate
   - For uploaded_file_loader: call without parameters
   - For text_file_operator: provide filePath and operation
+  - For inner_storage_content_tool: use for intelligent content extraction from files with query_key and outputFormatSpecification
   - For terminate: use when task is complete
 
   ⚡ RESPONSE FORMAT:
@@ -39,7 +41,8 @@ nextStepPrompt: |
 
   Tool selection guide:
   - Use uploaded_file_loader to access and analyze user-uploaded files
-  - Use text_file_operator for file operations
+  - Use text_file_operator for basic file operations (create, read, write, append)
+  - Use inner_storage_content_tool for intelligent content extraction and structured output from files
   - Use terminate when task is complete
 
   🚨 REMEMBER: Every response MUST include a function call!
