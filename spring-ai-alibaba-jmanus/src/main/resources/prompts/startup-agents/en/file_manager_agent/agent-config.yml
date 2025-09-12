@@ -17,10 +17,12 @@ nextStepPrompt: |
   # Input Format
   After users upload files, adopt a dual-track processing strategy for intelligent analysis and processing:
 
-  🔧 Track 1 - Document Files (Tool Chain Processing):
+  🔧 Track 1 - Document Files (Intelligent Routing Processing):
     - PDF documents → doc_loader extracts text → AI model analysis
     - Excel data → table_processor extracts data → AI model analysis
-    - Text/code → text_file_operator processes → AI model analysis
+    - Text/code files:
+      • Small files (≤500 lines) → text_file_operator processes → AI model analysis
+      • Large files (>500 lines) → Auto-route to inner_storage_content_tool (MapReduce) → AI model analysis
 
   🖼️ Track 2 - Image Files (Direct AI Processing):
     - Image files → Direct AI model visual analysis (no intermediate tools needed)
@@ -35,10 +37,12 @@ nextStepPrompt: |
     - Step 1: Call uploaded_file_loader for intelligent file analysis (no parameters needed)
     - Step 2: Select the next tool based on analysis results:
 
-    🔧 Document File Processing (Tool Chain → AI Analysis):
+    🔧 Document File Processing (Intelligent Routing → AI Analysis):
     - Analysis results show PDF files → Call doc_loader to extract text → Send text content to AI model for analysis
     - Analysis results show Excel/CSV → Call table_processor to extract data → Send structured data to AI model for analysis
-    - Analysis results show text/code → Call text_file_operator to process → Send processing results to AI model for analysis
+    - Analysis results show text/code files → Intelligent routing decision:
+      • If file ≤500 lines → Call text_file_operator to process → Send processing results to AI model for analysis
+      • If file >500 lines → Auto-call inner_storage_content_tool (MapReduce processing) → Send processing results to AI model for analysis
 
     🖼️ Image File Processing (Direct AI Analysis):
     - Analysis results show image files → 🚫 ABSOLUTELY DO NOT use any tools! Send images directly to AI model for visual analysis
@@ -70,13 +74,17 @@ nextStepPrompt: |
     4. Processing results should be integrated into user-friendly comprehensive reports
     5. Understand the optimal processing path for each file type
 
-  🎯 Key Decision Logic:
+  🎯 Key Decision Logic (with Intelligent Routing):
     - If uploaded_file_loader has not been called yet → Call uploaded_file_loader for intelligent analysis
     - If uploaded_file_loader has been called and analysis results obtained:
       - Analysis results show PDF files → Call doc_loader to extract text content
       - Analysis results show Excel files → Call table_processor to extract structured data
+      - Analysis results show text/code files → 🤖 Intelligent routing decision:
+        • Check file size and line count information
+        • If file ≤500 lines or ≤5MB → Call text_file_operator to process
+        • If file >500 lines or >5MB → Auto-call inner_storage_content_tool (MapReduce processing)
+        • If analysis results explicitly suggest "large file" or "MapReduce" → Directly call inner_storage_content_tool
     - Analysis results show image files → 🚫 FORBIDDEN to call any tools! Directly perform visual analysis and describe image content
-      - Analysis results show large document files/multiple document files → Call inner_storage_content_tool to trigger MapReduce
       - Analysis results show large image files → ⚠️ Direct AI analysis, do not use MapReduce
     - If all files have been processed → Call terminate to end task and generate comprehensive report
 
